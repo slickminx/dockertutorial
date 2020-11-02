@@ -1,0 +1,94 @@
+#The version of Docker Compose
+version: '3.7'
+
+# Services
+services:
+
+    #Nginx Service
+    nginx:
+        image: nginx:1.17-alpine
+        ports:
+            - 80:80
+            #under ports, 80:80 indicates that we want to map our local machine's port 80 (used by HTTP) to the container's. In other words, when we will access port 80 on our local machine (i.e. your computer), we will be forwarded to the port 80 of the Nginx container.
+        #volumes (basically, directories or single files) that we want to mount onto the container. This essentially means we can map local directories and files to directories and files on the container; in our case, we want Docker Compose to mount the src folder as the container's /var/www/php folder.
+        volumes: 
+            - ./src:/var/www/php:ro
+            #import the Nginx server configuration that will point to our application code
+            #As Nginx automatically reads files ending with .conf located in the /etc/nginx/conf.d directory, by mounting our own local conf.d directory in its place we make sure the configuration files it contains will be processed by Nginx on the container.
+            #:ro at the end of both volumes: this option stands for read only and indicates that the container shall not modify the content of these volumes in any way.
+            - ./.docker/nginx/conf.d:/etc/nginx/conf.d:ro
+            - phpmyadmindata:/var/www/phpmyadmin:ro
+        #the order in which Docker Compose starts the containers matters. An error can occur if NGINX is ready before the PHP
+        #ex:
+        #[emerg] 1#1: host not found in upstream "php" in /etc/nginx/conf.d/php.conf:7
+        #nginx_1  | nginx: [emerg] host not found in upstream "php" in /etc/nginx/conf.d/php.conf:7
+        #nginx_1 exited with code 1
+        #depends_on ensures that php is ran first.
+        depends_on: 
+            - php
+            - phpmyadmin
+    #PHP Service
+    php:
+        #image: php:7.4-fpm
+        #build section of the PHP service
+        #Instead of using the official PHP image as is, we tell Docker Compose to use the Dockerfile from .docker/php to build a new image.
+        #A Dockerfile is like the recipe to build an image: every image has one, even official ones (see for instance Nginx's).
+        build: ./.docker/php
+        working_dir: /var/www/php
+        #adding filepath to mount the directory containing our php code
+        volumes:
+            - ./src:/var/www/php
+        depends_on:
+            - mysql
+    #MySQL Service
+    mysql:
+        #there's no apline image for mysql yet
+        #the image points to MySQL's official image for version 8
+        image: mysql:8
+        #environment variables that will be set on the container upon creation. 
+        #allows us to set the root password and create a default database when the container starts
+        environment:
+            MYSQL_ROOT_PASSWORD: ${mysqlp}
+            MYSQL_DATABASE: ${mysqldb}
+        #The first volument is a configuration file (in read only mode), where will set the character set to utf8mb4_unicode_ci by default, which is standard nowadays
+        #Password plugin error?
+        #Some versions of PHP prior to 7.4 are incompatible with MySQL's new default password plugin introduced with version 8. If you require an older version of PHP, you might also need to add the following line to the configuration file:
+        #default-authentication-plugin = mysql_native_password
+        volumes: 
+            - ./.docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+            - mysqldata:/var/lib/mysql
+        #backup:
+            #image: backup-service
+            #volumes:
+                #- mysqldata:/var/lib/backup/data
+    #PHPMyAdmin Service
+    phpmyadmin:
+        #without the fpm-alpine and setting it under nginx, the phpmyadmin image was using its own http server, apache.
+        #5-fpm-alpine is the alpine-based version of the iage, whose container runs PHP-FPM as a process and expects PHP files to be handled by an external HTTP server
+        image: phpmyadmin/phpmyadmin:5-fpm-alpine
+        #removed in part2 tutorial
+        #Since we are mapping directly with Nginx's port 80 for phpmyadmin
+        #ports:
+            #maps local machine's port 8080 to container's port 80
+            #- 8080:80
+        environment:
+            #PMA HOST is env variable - Docker compose will automatically resolve mysql to the private IP address it assigned to the container)
+            PMA_HOST: mysql
+        volumes:
+            - phpmyadmindata:/var/www/html
+        depends_on:
+               - mysql
+
+#Volumes (Instead of looking at a local file, it refers to a named volume defined in a whole new volumes section, on the same level as services)
+volumes:
+        #we need such a volume b/c without it, everytime the mysql service container is destroyed the database is destroyed with it.
+        #to make it persistent, we basically tell the MySQL container to use the mysqldata volume to store the data locally (local being the default driver - volumes come with various drivers and options)
+        #https://docs.docker.com/compose/compose-file/#volumes-for-services-swarms-and-stack-files
+
+        #as a result, a local directory is mounted onto the container, instead of specifiying which one, we let Docker Compose pick a location
+        mysqldata:
+        
+        #the phpmyadmindata volument ensures that the phpMyAdmin files are available to Nginx, instead of mounting a local folder (ie. src), 
+        #we let Docker Compose pick a local folder to mount both onto Nginx and phpmyAdmin containers, effectively making the latter's content available to the former.
+        phpmyadmindata:
+#https://tech.osteel.me/posts/docker-for-local-web-development-part-1-a-basic-lemp-stack
